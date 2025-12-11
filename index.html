@@ -9,6 +9,7 @@
       href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css"
       rel="stylesheet"
     />
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.0.1/mqttws31.min.js"></script>
     <style>
       @import url("https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap");
       * {
@@ -682,10 +683,8 @@
         <div class="main-content">
           <div class="header">
             <div>
-              <h1><i class="fas fa-water"></i> Water Level Monitor Pro</h1>
-              <p class="subtitle">
-                Advanced Water Level Monitoring System - Dual Node Detection
-              </p>
+              <h1><i class="fas fa-water"></i> Hệ thống theo dõi mực nước</h1>
+              <p class="subtitle">Trường đại học Thủy lợi</p>
             </div>
             <button
               class="discord-btn"
@@ -696,7 +695,7 @@
             </button>
           </div>
           <div class="position-config">
-            <h3><i class="fas fa-cog"></i> Cấu Hình Vị Trí Container</h3>
+            <h3><i class="fas fa-cog"></i> Cài đặt vị trí đặt cảm biến</h3>
             <div class="position-inputs">
               <div class="input-group">
                 <input
@@ -845,12 +844,11 @@
           </div>
         </div>
       </div>
-      <!-- Enhanced Chatbot -->
       <div class="chatbot-container" id="chatbot">
         <div class="chatbot-header" onclick="toggleChatbot()">
           <div class="avatar"><i class="fas fa-robot"></i></div>
           <div class="info">
-            <div class="name">ARIA Bot</div>
+            <div class="name">Chat Box Hỗ trợ</div>
             <div class="status">🟢 Online</div>
           </div>
           <button class="toggle-btn" id="chatbotToggle">
@@ -893,6 +891,102 @@
       const API_ENDPOINT = `${SUPABASE_URL}/rest/v1/distance?select=*&order=created_at.desc`;
       let node1Position = 100;
       let node2Position = 100;
+
+      // START: CẤU HÌNH MQTT
+      const MQTT_HOST = "6d24cfbe16584b319b638e75ffc67408.s1.eu.hivemq.cloud";
+      const MQTT_PORT = 8884; // WebSocket port (TLS/WSS)
+      const MQTT_USERNAME = "hivemq.webclient.1764946653169";
+      const MQTT_PASSWORD = "VK;>61uCSXFn8p:wi2q!";
+      const MQTT_TOPIC = "duyhiep/alert/level";
+      let mqttClient = null;
+      let lastAlertLevel = 0; // Lưu trạng thái cảnh báo cuối cùng được gửi
+
+      const connectMqtt = () => {
+        try {
+          // Tạo một ID Client ngẫu nhiên để tránh xung đột
+          const clientId =
+            "web_dashboard_" + Math.random().toString(16).substr(2, 8);
+          // Sử dụng Paho MQTT Client, kết nối qua WebSockets (wss)
+          mqttClient = new Paho.MQTT.Client(
+            MQTT_HOST,
+            MQTT_PORT,
+            "/mqtt", // Đường dẫn mặc định cho WebSockets
+            clientId
+          );
+
+          mqttClient.onConnectionLost = onConnectionLost;
+          mqttClient.onMessageArrived = onMessageArrived;
+
+          console.log(`Connecting to MQTT broker: ${MQTT_HOST}:${MQTT_PORT}`);
+
+          // Tùy chọn kết nối
+          const connectOptions = {
+            timeout: 3,
+            userName: MQTT_USERNAME,
+            password: MQTT_PASSWORD,
+            useSSL: true, // Bắt buộc cho cổng 8884
+            onSuccess: onConnect,
+            onFailure: (responseObject) => {
+              console.error(
+                "MQTT Connection failed:",
+                responseObject.errorMessage
+              );
+            },
+          };
+
+          mqttClient.connect(connectOptions);
+        } catch (error) {
+          console.error("Lỗi khởi tạo MQTT:", error);
+        }
+      };
+
+      const onConnect = () => {
+        console.log("✅ MQTT Client Connected successfully.");
+      };
+
+      const onConnectionLost = (responseObject) => {
+        if (responseObject.errorCode !== 0) {
+          console.log("❌ MQTT Connection Lost:", responseObject.errorMessage);
+          // Thử kết nối lại sau 5 giây
+          setTimeout(connectMqtt, 5000);
+        }
+      };
+
+      const onMessageArrived = (message) => {
+        // Không dùng cho chức năng này
+      };
+
+      /**
+       * Gửi mức cảnh báo qua MQTT
+       * @param {number} alertLevel - Mức cảnh báo (0, 1, 2, 3)
+       */
+      const sendMqttNotification = (alertLevel) => {
+        // Chỉ gửi nếu mức cảnh báo thay đổi
+        if (alertLevel === lastAlertLevel) {
+          return;
+        }
+
+        if (mqttClient && mqttClient.isConnected()) {
+          const messagePayload = alertLevel.toString(); // Dữ liệu chỉ là số (0, 1, 2, 3)
+          const message = new Paho.MQTT.Message(messagePayload);
+          message.destinationName = MQTT_TOPIC;
+          message.retained = false;
+          message.qos = 0; // Quality of Service
+
+          mqttClient.send(message);
+          lastAlertLevel = alertLevel; // Cập nhật trạng thái cuối cùng
+          console.log(
+            `✅ Gửi MQTT thành công: Topic="${MQTT_TOPIC}", Payload="${messagePayload}"`
+          );
+        } else {
+          console.warn(
+            "❌ Không thể gửi MQTT: Client chưa kết nối hoặc đang ngắt kết nối. Đang thử kết nối lại..."
+          );
+          connectMqtt(); // Thử kết nối lại
+        }
+      };
+      // END: CẤU HÌNH MQTT
+
       const savePositions = () => {
         const node1 =
           parseFloat(document.getElementById("node1Position").value) || 100;
@@ -981,6 +1075,31 @@
       let currentPeriod = "day";
       let temperatureChart = null;
       let humidityChart = null;
+
+      const formatDateTimeVietnam = (date) => {
+        const day = String(date.getDate()).padStart(2, "0");
+        const month = String(date.getMonth() + 1).padStart(2, "0");
+        const year = date.getFullYear();
+        const hours = String(date.getHours()).padStart(2, "0");
+        const minutes = String(date.getMinutes()).padStart(2, "0");
+        const seconds = String(date.getSeconds()).padStart(2, "0");
+        return `${hours}:${minutes}:${seconds} ${day}/${month}/${year}`;
+      };
+
+      /**
+       * Hàm getAlertLevel được đưa ra ngoài để có phạm vi toàn cục
+       * nhằm khắc phục lỗi ReferenceError: getAlertLevel is not defined
+       */
+      const getAlertLevel = (waterLevel) => {
+        if (waterLevel === "--") return 0; // Mức 0: Bình thường
+        const level = parseFloat(waterLevel);
+        if (level > 300) return 3;
+        if (level > 200) return 2;
+        if (level > 100) return 1;
+        return 0; // Mức 0: Bình thường
+      };
+
+      // Khởi tạo Charts
       const initCharts = () => {
         const tempCtx = document
           .getElementById("temperatureChart")
@@ -1071,6 +1190,8 @@
           },
         });
       };
+
+      // Cập nhật Charts
       const updateCharts = (period) => {
         let filteredData = sensorData;
         if (period === "day") {
@@ -1100,6 +1221,8 @@
         humidityChart.data.datasets[0].data = node2Data;
         humidityChart.update();
       };
+
+      // Cập nhật Status Cards và gửi cảnh báo
       const updateStatusCards = () => {
         if (sensorData.length === 0) return;
         const latestData = sensorData[0];
@@ -1117,14 +1240,7 @@
           waterLevel1 + " cm";
         document.getElementById("currentNode2").textContent =
           waterLevel2 + " cm";
-        const getAlertLevel = (waterLevel) => {
-          if (waterLevel === "--") return null;
-          const level = parseFloat(waterLevel);
-          if (level > 300) return 3;
-          if (level > 200) return 2;
-          if (level > 100) return 1;
-          return null;
-        };
+
         const getAlertText = (level) => {
           if (level === 3)
             return '<i class="fas fa-exclamation-circle"></i> CẢNH BÁO LVL 3 (>3m)';
@@ -1134,13 +1250,22 @@
             return '<i class="fas fa-exclamation"></i> CẢNH BÁO LVL 1 (>1m)';
           return "";
         };
+
         const node1AlertLevel = getAlertLevel(waterLevel1);
         const node2AlertLevel = getAlertLevel(waterLevel2);
+
+        // Xác định mức cảnh báo cao nhất của hệ thống
+        const maxLevel = Math.max(node1AlertLevel, node2AlertLevel);
+
+        // GỬI CẢNH BÁO MQTT
+        sendMqttNotification(maxLevel);
+
         const node1Warning = document.getElementById("node1Warning");
-        if (node1AlertLevel) {
+        if (node1AlertLevel > 0) {
           node1Warning.style.display = "inline-block";
           node1Warning.className = `warning-indicator level${node1AlertLevel}`;
           node1Warning.innerHTML = getAlertText(node1AlertLevel);
+          // Gửi Discord (chỉ khi có cảnh báo > 0)
           sendDiscordNotification(
             "NODE1",
             waterLevel1,
@@ -1152,11 +1277,13 @@
           node1Warning.style.display = "none";
           document.getElementById("node1Card").classList.remove("warning");
         }
+
         const node2Warning = document.getElementById("node2Warning");
-        if (node2AlertLevel) {
+        if (node2AlertLevel > 0) {
           node2Warning.style.display = "inline-block";
           node2Warning.className = `warning-indicator level${node2AlertLevel}`;
           node2Warning.innerHTML = getAlertText(node2AlertLevel);
+          // Gửi Discord (chỉ khi có cảnh báo > 0)
           sendDiscordNotification(
             "NODE2",
             waterLevel2,
@@ -1168,6 +1295,7 @@
           node2Warning.style.display = "none";
           document.getElementById("node2Card").classList.remove("warning");
         }
+
         const node1Trend = node1AlertLevel
           ? `<span class="trend-up">⚠️ LEVEL ${node1AlertLevel}</span>`
           : '<span class="trend-down">✓ Normal</span>';
@@ -1176,8 +1304,8 @@
           : '<span class="trend-down">✓ Normal</span>';
         document.getElementById("node1Trend").innerHTML = node1Trend;
         document.getElementById("node2Trend").innerHTML = node2Trend;
-        const hasWarning = node1AlertLevel || node2AlertLevel;
-        const maxLevel = Math.max(node1AlertLevel || 0, node2AlertLevel || 0);
+
+        const hasWarning = maxLevel > 0;
         const statusText =
           maxLevel === 3
             ? "CRITICAL"
@@ -1187,6 +1315,7 @@
             ? "CAUTION"
             : "NORMAL";
         document.getElementById("systemStatus").textContent = statusText;
+
         const warningIndicator = document.getElementById("warningIndicator");
         if (hasWarning) {
           warningIndicator.style.display = "inline-block";
@@ -1197,6 +1326,7 @@
           warningIndicator.style.display = "none";
           document.getElementById("statusCard").classList.remove("warning");
         }
+
         document.getElementById("dataCount").textContent = sensorData.length;
         const date = new Date(latestData.created_at);
         const hours = String(date.getHours()).padStart(2, "0");
@@ -1206,26 +1336,34 @@
           "lastUpdate"
         ).textContent = `${hours}:${minutes}:${seconds}`;
       };
+
+      // Cập nhật Bảng Dữ liệu
       const updateTable = () => {
         const tableBody = document.getElementById("tableBody");
         tableBody.innerHTML = "";
         sensorData.slice(0, 20).forEach((item, index) => {
           const row = document.createElement("tr");
-          if (item.warning) row.classList.add("warning-row");
+
+          // Sử dụng hàm getAlertLevel ở phạm vi toàn cục để kiểm tra và áp dụng class
+          const level1 = getAlertLevel(item.water_level_node1.toFixed(1));
+          const level2 = getAlertLevel(item.water_level_node2.toFixed(1));
+          if (level1 > 0 || level2 > 0) row.classList.add("warning-row");
+
           const timestamp = formatDateTimeVietnam(new Date(item.created_at));
           row.innerHTML = `
-          <td>${item.id}</td>
-          <td>${timestamp}</td>
-          <td>${Number(item.position_node1 || 0).toFixed(1)}</td>
-          <td>${Number(item.water_level_node1).toFixed(1)}</td>
-          <td>${Number(item.distance_node1).toFixed(1)}</td>
-          <td>${Number(item.position_node2 || 0).toFixed(1)}</td>
-          <td>${Number(item.water_level_node2).toFixed(1)}</td>
-          <td>${Number(item.distance_node2).toFixed(1)}</td>
-        `;
+            <td>${item.id}</td>
+            <td>${timestamp}</td>
+            <td>${Number(item.position_node1 || 0).toFixed(1)}</td>
+            <td>${Number(item.water_level_node1).toFixed(1)}</td>
+            <td>${Number(item.distance_node1).toFixed(1)}</td>
+            <td>${Number(item.position_node2 || 0).toFixed(1)}</td>
+            <td>${Number(item.water_level_node2).toFixed(1)}</td>
+            <td>${Number(item.distance_node2).toFixed(1)}</td>
+            `;
           tableBody.appendChild(row);
         });
       };
+
       const toggleChatbot = () => {
         const chatbot = document.getElementById("chatbot");
         chatbot.classList.toggle("expanded");
@@ -1257,16 +1395,8 @@
         sensorData = await fetchSensorData();
         updateAll();
         loadDiscordWebhook();
+        connectMqtt(); // KHỞI TẠO KẾT NỐI MQTT
         setInterval(refreshData, 10000);
-      };
-      const formatDateTimeVietnam = (date) => {
-        const day = String(date.getDate()).padStart(2, "0");
-        const month = String(date.getMonth() + 1).padStart(2, "0");
-        const year = date.getFullYear();
-        const hours = String(date.getHours()).padStart(2, "0");
-        const minutes = String(date.getMinutes()).padStart(2, "0");
-        const seconds = String(date.getSeconds()).padStart(2, "0");
-        return `${hours}:${minutes}:${seconds} ${day}/${month}/${year}`;
       };
 
       // <CHANGE> Enhanced Discord notification with detailed information
@@ -1299,10 +1429,10 @@
             : "🟢";
 
         const message = `${emoji} **CẢNH BÁO HỆ THỐNG**
-**Node:** ${node}
-**Mực nước hiện tại:** ${waterLevel} cm
-**Mức cảnh báo:** ${levelDescription}
-**Thời gian:** ${eventTime}`;
+    **Node:** ${node}
+    **Mực nước hiện tại:** ${waterLevel} cm
+    **Mức cảnh báo:** ${levelDescription}
+    **Thời gian:** ${eventTime}`;
 
         fetch(webhookUrl, {
           method: "POST",
@@ -1360,9 +1490,9 @@
         const botMsg = document.createElement("div");
         botMsg.className = "message bot";
         botMsg.innerHTML = `
-        <div class="avatar"><i class="fas fa-robot"></i></div>
-        <div class="content">${botResponse.replace(/\n/g, "<br>")}</div>
-      `;
+            <div class="avatar"><i class="fas fa-robot"></i></div>
+            <div class="content">${botResponse.replace(/\n/g, "<br>")}</div>
+          `;
         messagesDiv.appendChild(botMsg);
         input.value = "";
         messagesDiv.scrollTop = messagesDiv.scrollHeight;
@@ -1406,14 +1536,17 @@
             : latestData.water_level_node2;
         const distance =
           nodeNum === 1 ? latestData.distance_node1 : latestData.distance_node2;
+
+        const alertLevel = getAlertLevel(waterLevel.toFixed(1));
         let status =
-          waterLevel > 300
+          alertLevel === 3
             ? "🔴 CRITICAL"
-            : waterLevel > 200
+            : alertLevel === 2
             ? "🟠 WARNING"
-            : waterLevel > 100
+            : alertLevel === 1
             ? "🟡 CAUTION"
             : "🟢 NORMAL";
+
         return {
           node: `Node ${nodeNum}`,
           waterLevel: waterLevel.toFixed(1),
